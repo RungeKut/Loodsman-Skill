@@ -16,11 +16,15 @@ description: "Скриптовое чтение ЛОЦМАН:PLM (АСКОН) 20
 ## Быстрый старт
 
 ```bash
+cscript //Nologo scripts/loodsman_export.vbs find "обозначение"      # поиск объекта
 python scripts/check_versions.py                    # скан дерева + сравнение версий
-cscript //Nologo scripts/loodsman_export.vbs fetch <tsvDir> <outDir> "" "pdf,docx,spw"
+cscript //Nologo scripts/loodsman_export.vbs fetch <rootId> <tsvDir> <outDir> "" "pdf,docx,spw"
 python scripts/build_index.py                       # index.md + versions.json + *.url
 python scripts/check_versions.py --fetch            # догрузить изменившееся (по CRC)
 ```
+
+Типовой запрос «найди и выгрузи»: `find "<обозначение>"` → взять id
+сборки (не документа) → `scan` → `fetch` → `build_index.py`.
 
 ## Железные правила
 

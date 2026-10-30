@@ -6,7 +6,7 @@
 | id | Утверждение | status | Файл |
 |---|---|---|---|
 | 10-01 | Подключение: DataProvider.LoodsmanConnection → API8 → GetSimpleAPI → RunMethod; 32-битный cscript; лицензию освобождать | проверено | [10_API/10-01_подключение_dataprovider.md](10_API/10-01_подключение_dataprovider.md) |
-| 10-02 | Белый список методов чтения: GetTree, GetLinkedFast2, GetInfoAboutVersion (режим 7 = файлы), GetFileById; поля датасетов | проверено | [10_API/10-02_методы_чтения.md](10_API/10-02_методы_чтения.md) |
+| 10-02 | Белый список методов чтения: FindObjects, GetVersionList, GetTree(+атрибуты), GetLinkedFast2, GetInfoAboutVersion (режим 7 = файлы), GetFileById | проверено | [10_API/10-02_методы_чтения.md](10_API/10-02_методы_чтения.md) |
 | 20-01 | Цикл выгрузки проекта: scan → fetch (фильтры расширений) → build_index → check_versions --fetch; CRC32 из API = CRC32 файла | проверено | [20_ПРИЁМЫ/20-01_выгрузка_проекта.md](20_ПРИЁМЫ/20-01_выгрузка_проекта.md) |
 | 30-01 | cscript читает .vbs как ANSI: UTF-8 кириллица ломает имена баз/связей — ASCII-скрипт + ini в cp1251 | проверено | [30_ГРАБЛИ/30-01_vbs_кириллица_cp1251.md](30_ГРАБЛИ/30-01_vbs_кириллица_cp1251.md) |
 | 30-02 | And/Or в VBScript вычисляют оба операнда: FileExists And GetFile падает — вложенные If | проверено | [30_ГРАБЛИ/30-02_vbs_and_без_короткого_замыкания.md](30_ГРАБЛИ/30-02_vbs_and_без_короткого_замыкания.md) |

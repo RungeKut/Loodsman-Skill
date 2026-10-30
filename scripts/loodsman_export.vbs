@@ -421,16 +421,73 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
     ", filtered: " & nSkipFilt & ", errors: " & nErr
 End Sub
 
+' ---------- FIND ----------
+' FindObjects by designation substring; prints id + Navigate link per row.
+Sub DoFind(query, db, treeFolder)
+  Dim ds, n
+  Set ds = NewDS()
+  On Error Resume Next
+  ds.DATA = gSapi.RunMethod("FindObjects", Array("", "%" & query & "%", "", "", "", "", ""))
+  If Err.Number <> 0 Then
+    WScript.Echo "ERR FindObjects: " & Err.Number & " " & Err.Description
+    Err.Clear
+    On Error GoTo 0
+    Exit Sub
+  End If
+  On Error GoTo 0
+  ds.First
+  n = 0
+  Do While Not ds.Eof
+    n = n + 1
+    Dim oid, raw
+    oid = FV(ds, "_ID_VERSION")
+    raw = "0|" & db & "|" & treeFolder & "|" & oid
+    WScript.Echo oid & vbTab & FV(ds, "_TYPE") & vbTab & FV(ds, "_PRODUCT") & _
+      vbTab & "v" & FV(ds, "_VERSION") & vbTab & FV(ds, "_STATE") & vbTab & _
+      "ask:Loodsman.URL?Action=Navigate,params=" & B64Cp1251(raw)
+    ds.Next
+  Loop
+    WScript.Echo "Found: " & n
+End Sub
+
+' base64 of a cp1251-encoded string (ADODB handles the Unicode->1251 mapping)
+Function B64Cp1251(s)
+  Dim stm, xml, node
+  Set stm = CreateObject("ADODB.Stream")
+  stm.Type = 2
+  stm.Charset = "windows-1251"
+  stm.Open
+  stm.WriteText s
+  stm.Position = 0
+  stm.Type = 1
+  Dim bytes
+  bytes = stm.Read
+  stm.Close
+  Set xml = CreateObject("Msxml2.DOMDocument.6.0")
+  Set node = xml.createElement("b")
+  node.dataType = "bin.base64"
+  node.nodeTypedValue = bytes
+  B64Cp1251 = node.text
+End Function
+
 ' ---------- MAIN ----------
 Dim gRootId
 Dim mode
 If WScript.Arguments.Count < 2 Then
-  WScript.Echo "Usage: loodsman_export.vbs scan <rootId> <tsvDir> | fetch <rootId> <tsvDir> <outDir> [exclude] [include]"
+  WScript.Echo "Usage: loodsman_export.vbs find <designation> | scan <rootId> <tsvDir> | fetch <rootId> <tsvDir> <outDir> [exclude] [include]"
   WScript.Quit 1
 End If
 mode = WScript.Arguments(0)
 
-If mode = "scan" Then
+If mode = "find" Then
+  Dim q
+  q = WScript.Arguments(1)
+  Connect
+  DoFind q, DB_NAME, IniValue("treeFolder")
+  Disconnect
+  WScript.Echo "DONE"
+
+ElseIf mode = "scan" Then
   Dim rootId, tsvDir
   rootId = CLng(WScript.Arguments(1))
   tsvDir = WScript.Arguments(2)
