@@ -12,6 +12,8 @@
 '     db=<database display name>
 '     linkComposition=<composition link type name>
 '     linkDocuments=<documents link type name>
+'     objNameAttr=<attribute for object display name, e.g. name>
+'     objNoteAttr=<attribute for object note, e.g. note>
 '   32-bit cscript required (SysWOW64) - DataProvider.dll is x86 COM.
 ' TSV files: cp1251, TAB-separated.
 ' ============================================================
@@ -46,10 +48,14 @@ Function IniValue(key)
   f.Close
 End Function
 
-Dim DB_NAME, LINK_COMP, LINK_DOCS
+Dim DB_NAME, LINK_COMP, LINK_DOCS, OBJ_NAME_ATTR, OBJ_NOTE_ATTR
 DB_NAME = IniValue("db")
 LINK_COMP = IniValue("linkComposition")
 LINK_DOCS = IniValue("linkDocuments")
+OBJ_NAME_ATTR = IniValue("objNameAttr")
+OBJ_NOTE_ATTR = IniValue("objNoteAttr")
+If OBJ_NAME_ATTR = "" Then OBJ_NAME_ATTR = "name"    ' fallback: no such column -> FV=""
+If OBJ_NOTE_ATTR = "" Then OBJ_NOTE_ATTR = "note"
 If DB_NAME = "" Or LINK_COMP = "" Or LINK_DOCS = "" Then
   WScript.Echo "ERROR: fill " & SkillRoot() & "\local\loodsman.ini" & _
     " with db=, linkComposition=, linkDocuments= (ANSI encoding)"
@@ -154,20 +160,22 @@ Sub ScanObject(idVersion, parentVersion, depth)
   If gObjects.Exists("D" & idVersion) Then Exit Sub
   gObjects.Add "D" & idVersion, "done"
 
-  Set ds = RunData("GetTree", Array("", "", "", CLng(idVersion), LINK_COMP, False))
+  ' boWithAttrs=True: атрибутные колонки (Наименование, Примечание, ...) в наборе
+  Set ds = RunData("GetTree", Array("", "", "", CLng(idVersion), LINK_COMP, True))
   If Not ds Is Nothing Then
     ds.First
     Do While Not ds.Eof
       childId = CLng(FV(ds, "_ID_VERSION"))
       row = childId & "|obj|" & parentVersion & "|" & FV(ds, "_TYPE") & "|" & _
             FV(ds, "_PRODUCT") & "|" & FV(ds, "_VERSION") & "|" & _
-            FV(ds, "_STATE") & "|" & FV(ds, "_LINKTYPE")
+            FV(ds, "_STATE") & "|" & FV(ds, "_LINKTYPE") & "|" & _
+            FV(ds, OBJ_NAME_ATTR) & "|" & FV(ds, OBJ_NOTE_ATTR)
       If Not gObjects.Exists(childId) Then gObjects.Add childId, row
       ds.Next
     Loop
   End If
 
-  Set ds = RunData("GetTree", Array("", "", "", CLng(idVersion), LINK_DOCS, False))
+  Set ds = RunData("GetTree", Array("", "", "", CLng(idVersion), LINK_DOCS, True))
   If Not ds Is Nothing Then
     ds.First
     Do While Not ds.Eof
@@ -175,7 +183,8 @@ Sub ScanObject(idVersion, parentVersion, depth)
       If Not gObjects.Exists(docId) Then
         row = docId & "|doc|" & idVersion & "|" & FV(ds, "_TYPE") & "|" & _
               FV(ds, "_PRODUCT") & "|" & FV(ds, "_VERSION") & "|" & _
-              FV(ds, "_STATE") & "|" & FV(ds, "_LINKTYPE")
+              FV(ds, "_STATE") & "|" & FV(ds, "_LINKTYPE") & "|" & _
+              FV(ds, OBJ_NAME_ATTR) & "|" & FV(ds, OBJ_NOTE_ATTR)
         gObjects.Add docId, row
       End If
       ds.Next
@@ -233,10 +242,83 @@ Function WriteTSV(path, header, dict)
 End Function
 
 ' ---------- FETCH ----------
+' Layout: one folder per OBJECT (display name: designation + name + note),
+' nested like the composition tree; all files of an object's documents go
+' directly into the object folder, no per-document subfolders.
+Dim gObjRow, gObjDir, gDirOwner, gFileOwner
+Set gObjRow = CreateObject("Scripting.Dictionary")   ' id -> objects.tsv row
+Set gObjDir = CreateObject("Scripting.Dictionary")   ' id -> relative dir ("" for root)
+Set gDirOwner = CreateObject("Scripting.Dictionary") ' relative dir -> owner id
+Set gFileOwner = CreateObject("Scripting.Dictionary")' full dst -> docId
+
+Function ObjParent(id)
+  ObjParent = Split(gObjRow(id), "|")(2)
+End Function
+
+Function ObjKind(id)
+  ObjKind = Split(gObjRow(id), "|")(1)
+End Function
+
+Function ObjDisplay(id)
+  Dim p, product, nameAttr, note, r
+  p = Split(gObjRow(id), "|")
+  product = p(4): nameAttr = p(8): note = p(9)
+  r = product
+  If nameAttr <> "" And InStr(1, product, nameAttr, vbTextCompare) = 0 Then
+    r = Trim(r & " " & nameAttr)
+  End If
+  If note <> "" And InStr(1, r, note, vbTextCompare) = 0 Then
+    r = Trim(r & " " & note)
+  End If
+  If Trim(r) = "" Then r = product
+  If Trim(r) = "" Or r = "ROOT" Then r = p(3) & "_" & id
+  ObjDisplay = SafeName(r)
+End Function
+
+' relative dir of an object; root -> ""
+Function ObjRelDir(id)
+  Dim chain, cur, n
+  If gObjDir.Exists(id) Then
+    ObjRelDir = gObjDir(id)
+    Exit Function
+  End If
+  chain = ""
+  n = 0
+  cur = id
+  Do While cur <> "" And cur <> "0" And n < 60
+    If cur = CStr(gRootId) Then Exit Do
+    If Not gObjRow.Exists(cur) Then Exit Do
+    chain = ObjDisplay(cur) & "\" & chain
+    cur = ObjParent(cur)
+    n = n + 1
+  Loop
+  ' unique folder per object: if a same-named folder belongs to another id - suffix
+  Dim base, cand, owner
+  If Right(chain, 1) = "\" Then chain = Left(chain, Len(chain) - 1)
+  base = chain
+  cand = base
+  Do While gDirOwner.Exists(cand) And gDirOwner(cand) <> id
+    cand = base & " [" & id & "]"
+  Loop
+  If Not gDirOwner.Exists(cand) Then gDirOwner.Add cand, id
+  gObjDir.Add id, cand
+  ObjRelDir = cand
+End Function
+
 Sub DoFetch(tsvDir, outDir, excl, incl)
-  Dim f, line, parts, docId, fName, size, src, dst, docType, docProd, ext
-  Dim nDone, nSkip, nErr, nSkipFilt, bHave, bSkip
+  Dim f, line, parts, docId, fName, size, src, dst, docProd, ext
+  Dim nDone, nSkip, nErr, nSkipFilt, bHave, bSkip, ownerId, relDir, dstDir
   nDone = 0: nSkip = 0: nErr = 0: nSkipFilt = 0
+
+  ' objects.tsv -> gObjRow
+  Set f = gFso.OpenTextFile(tsvDir & "\objects.tsv", 1, False, False)
+  f.SkipLine
+  Do While Not f.AtEndOfStream
+    line = f.ReadLine
+    parts = Split(line, "|")
+    If UBound(parts) >= 9 Then gObjRow.Add parts(0), line
+  Loop
+  f.Close
 
   Set f = gFso.OpenTextFile(tsvDir & "\files.tsv", 1, False, False)
   f.SkipLine
@@ -247,7 +329,7 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
     line = f.ReadLine
     parts = Split(line, vbTab)
     If UBound(parts) >= 8 Then
-      docId = parts(0): docType = parts(1): docProd = parts(2)
+      docId = parts(0): docProd = parts(2)
       fName = parts(5): size = parts(6)
       If fName <> "" And Not outList.Exists(fName & "|" & docId) Then
         outList.Add fName & "|" & docId, line
@@ -261,10 +343,31 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
         If bSkip Then
           nSkipFilt = nSkipFilt + 1
         Else
-          Dim dstDir
-          dstDir = outDir & "\" & SafeName(docProd) & " [" & SafeName(docType) & "]"
+          ' owner object = parent of the document; docs of root -> project root
+          ownerId = ""
+          If gObjRow.Exists(docId) Then ownerId = ObjParent(docId)
+          If ownerId = "" Or ownerId = "0" Then
+            relDir = ""
+          ElseIf ownerId = CStr(gRootId) Then
+            relDir = ""
+          Else
+            relDir = ObjRelDir(ownerId)
+          End If
+          dstDir = outDir
+          If relDir <> "" Then dstDir = outDir & "\" & relDir
           MakeDirMulti dstDir
           dst = dstDir & "\" & SafeName(fName)
+
+          ' name collision inside one object folder: prefix with designation
+          If gFileOwner.Exists(dst) And gFileOwner(dst) <> docId Then
+            Dim n2
+            n2 = 1
+            Do While gFileOwner.Exists(dst)
+              dst = dstDir & "\" & SafeName(docProd) & "_" & n2 & "_" & SafeName(fName)
+              n2 = n2 + 1
+            Loop
+          End If
+          If Not gFileOwner.Exists(dst) Then gFileOwner.Add dst, docId
 
           bHave = False
           If gFso.FileExists(dst) Then
@@ -319,9 +422,10 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
 End Sub
 
 ' ---------- MAIN ----------
+Dim gRootId
 Dim mode
 If WScript.Arguments.Count < 2 Then
-  WScript.Echo "Usage: loodsman_export.vbs scan <rootId> <tsvDir> | fetch <tsvDir> <outDir> [exclude] [include]"
+  WScript.Echo "Usage: loodsman_export.vbs scan <rootId> <tsvDir> | fetch <rootId> <tsvDir> <outDir> [exclude] [include]"
   WScript.Quit 1
 End If
 mode = WScript.Arguments(0)
@@ -343,7 +447,7 @@ If mode = "scan" Then
     If VarType(k) <> vbString Then objsNoMark.Add k, gObjects(k)
   Next
 
-  WriteTSV tsvDir & "\objects.tsv", "id|kind|parent|type|product|version|state|linktype", objsNoMark
+  WriteTSV tsvDir & "\objects.tsv", "id|kind|parent|type|product|version|state|linktype|name|note", objsNoMark
   WriteTSV tsvDir & "\files.tsv", "docId" & vbTab & "docType" & vbTab & "docProduct" & vbTab & _
     "docVer" & vbTab & "fileId" & vbTab & "fileName" & vbTab & "size" & vbTab & "crc" & vbTab & "modified", gFiles
 
@@ -357,13 +461,15 @@ If mode = "scan" Then
   WScript.Echo "Total size, MB: " & FormatNumber(totalSize / 1048576, 1)
 
 ElseIf mode = "fetch" Then
-  Dim ftsv, outd, excl, incl
-  ftsv = WScript.Arguments(1)
-  outd = WScript.Arguments(2)
+  Dim fRoot, ftsv, outd, excl, incl
+  fRoot = WScript.Arguments(1)
+  ftsv = WScript.Arguments(2)
+  outd = WScript.Arguments(3)
   excl = ""
   incl = ""
-  If WScript.Arguments.Count >= 4 Then excl = LCase(WScript.Arguments(3))
-  If WScript.Arguments.Count >= 5 Then incl = LCase(WScript.Arguments(4))
+  If WScript.Arguments.Count >= 5 Then excl = LCase(WScript.Arguments(4))
+  If WScript.Arguments.Count >= 6 Then incl = LCase(WScript.Arguments(5))
+  gRootId = CLng(fRoot)
   Connect
   DoFetch ftsv, outd, excl, incl
   Disconnect

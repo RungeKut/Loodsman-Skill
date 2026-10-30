@@ -3,14 +3,18 @@
 build_index.py — индекс проекта из TSV-выгрузки Лоцман.
 
 Вход  (папка TSV, cp1251):
-    objects.tsv     id|kind|parent|type|product|version|state|linktype
+    objects.tsv     id|kind|parent|type|product|version|state|linktype|name|note
     files.tsv       docId, docType, docProduct, docVer, fileId, fileName, size, crc, modified
     files_done.tsv  то же + status
 
 Выход (папка проекта):
     index.md        дерево объектов с гиперссылками ask:Loodsman.URL
     versions.json   machine-readable состояние для проверки версий
-    *.url           гиперссылка в папке каждого документа
+    *.url           гиперссылка объекта в его папке
+
+Раскладка файлов совпадает с loodsman_export.vbs fetch: папка объекта
+(Обозначение + Наименование + примечание), вложенность = состав; файлы
+документов лежат прямо в папке объекта-владельца.
 
 Запуск:
     python build_index.py [tsvDir] [projectDir] [db] [treeFolder] [rootId] [rootTitle]
@@ -77,20 +81,21 @@ for line in open(os.path.join(TSV, 'objects.tsv'), encoding='cp1251').readlines(
     if len(p) < 7:
         continue
     oid, kind, parent, otype, product, ver, state, link = (p + [''] * 8)[:8]
+    name = p[8] if len(p) > 8 else ''
+    note = p[9] if len(p) > 9 else ''
     objects[oid] = dict(id=oid, kind=kind, parent=parent, type=otype,
-                        product=product, ver=ver, state=state, link=link)
+                        product=product, ver=ver, state=state, link=link,
+                        name=name, note=note)
 
-files = []     # файлы с путём скачивания
-fetched = {}   # имя|docId -> статус
+files = []
+fetched = {}
 for p in read_tsv(os.path.join(TSV, 'files.tsv')):
     if len(p) < 9:
         continue
     doc_id, doc_type, doc_prod, doc_ver, file_id, name, size, crc, modified = p[:9]
-    rel_dir = safe(doc_prod) + ' [' + safe(doc_type) + ']'
     files.append(dict(doc_id=doc_id, doc_type=doc_type, doc_prod=doc_prod,
                       doc_ver=doc_ver, file_id=file_id, name=name,
-                      size=size, crc=crc, modified=modified,
-                      rel_dir=rel_dir, rel_path=rel_dir + '\\' + safe(name)))
+                      size=size, crc=crc, modified=modified))
 
 done_path = os.path.join(TSV, 'files_done.tsv')
 if os.path.exists(done_path):
@@ -98,11 +103,42 @@ if os.path.exists(done_path):
         if len(p) >= 10:
             fetched[p[5] + '|' + p[0]] = p[9]
 
+
+# ---- раскладка: папка объекта = Обозначение Наименование Примечание
+def display(o):
+    r = o['product'] or ''
+    for extra in (o['name'], o['note']):
+        if extra and extra.lower() not in r.lower():
+            r = f'{r} {extra}'.strip()
+    if not r or r == 'ROOT':
+        r = f'{o["type"]}_{o["id"]}'
+    return safe(r)
+
+
+def rel_dir(oid):
+    """Относительный путь папки объекта (root -> '')."""
+    chain = []
+    cur = oid
+    for _ in range(60):
+        if cur == ROOT_ID or cur not in objects:
+            break
+        chain.append(display(objects[cur]))
+        cur = objects[cur]['parent']
+    return os.path.join(*reversed(chain)) if chain else ''
+
+
+for fl in files:
+    owner = objects.get(fl['doc_id'], {}).get('parent', '')
+    fl['rel_dir'] = rel_dir(owner) if owner and owner != ROOT_ID else ''
+    fl['rel_path'] = (fl['rel_dir'] + '\\' if fl['rel_dir'] else '') + safe(fl['name'])
+
 # ---- versions.json (для проверки версий)
 index = {
     'base': DB, 'tree_folder': FOLDER, 'root': ROOT_ID, 'root_title': ROOT_TITLE,
     'objects': [dict(id=o['id'], kind=o['kind'], parent=o['parent'], type=o['type'],
                      product=o['product'], version=o['ver'], state=o['state'],
+                     name=o['name'], note=o['note'],
+                     rel_dir=rel_dir(o['id']) if o['id'] != ROOT_ID else '',
                      url=make_link(o['id']))
                 for o in objects.values()],
     'files': [dict(f, url=make_link(f['doc_id']),
@@ -118,7 +154,7 @@ for fl in files:
 
 lines = [f'# Индекс проекта: {ROOT_TITLE}', '']
 lines.append(f'База: {DB}, узел дерева: {FOLDER}. Объектов: {len(objects)}, файлов: {len(files)}.')
-lines.append('')
+lines.append('Файлы лежат в папке объекта-владельца (Обозначение Наименование Примечание).')
 lines.append('Ссылки вида `ask:Loodsman.URL?...` открывают объект в ЛОЦМАН Клиент.')
 lines.append('')
 
@@ -130,8 +166,10 @@ def render_obj(oid, depth, out):
         o = dict(o, product=ROOT_TITLE)
     pad = '  ' * depth
     state = f' ({o["state"]})' if o['state'] else ''
-    out.append(f'{pad}- **{o["product"] or o["type"]}** — {o["type"]}, v{o["ver"]}{state}'
-               f' · [открыть в ЛОЦМАН]({make_link(oid)})')
+    dirname = rel_dir(oid) if oid != ROOT_ID else '(корень)'
+    title = display(o) if oid != ROOT_ID else ROOT_TITLE
+    out.append(f'{pad}- **{title or o["type"]}** — {o["type"]}, v{o["ver"]}{state}'
+               f' · [открыть в ЛОЦМАН]({make_link(oid)}) · `{dirname}`')
     for dobj in [x for x in objects.values() if x['kind'] == 'doc' and x['parent'] == oid]:
         pad2 = '  ' * (depth + 1)
         out.append(f'{pad2}- _{dobj["type"]}_ **{dobj["product"]}** v{dobj["ver"]} ({dobj["state"]})'
@@ -163,20 +201,23 @@ for dobj in objects.values():
 with open(os.path.join(OUT, 'index.md'), 'w', encoding='utf-8') as f:
     f.write('\n'.join(lines))
 
-# ---- .url в папках документов
+# ---- .url в папках объектов (у объектов с файлами)
 made = set()
 for fl in files:
-    d = os.path.join(OUT, fl['rel_dir'])
+    owner = objects.get(fl['doc_id'], {}).get('parent', '')
+    if not owner or owner == ROOT_ID:
+        d = OUT
+    else:
+        d = os.path.join(OUT, rel_dir(owner))
     if not os.path.isdir(d):
         continue
-    key = fl['doc_id']
-    if key in made:
+    if owner in made:
         continue
-    made.add(key)
-    dobj = objects.get(key, {})
-    name = safe((dobj.get('product') or key) + ' - Loodsman.url')
-    with open(os.path.join(d, name), 'w', encoding='cp1251') as f:
-        f.write('[InternetShortcut]\r\nURL=' + make_link(key) + '\r\n')
+    made.add(owner)
+    o = objects.get(owner, {})
+    nm = display(o) if o else owner
+    with open(os.path.join(d, safe(nm) + ' - Loodsman.url'), 'w', encoding='cp1251') as f:
+        f.write('[InternetShortcut]\r\nURL=' + make_link(owner) + '\r\n')
 
 print(f'index.md, versions.json, .url x{len(made)} готово; '
       f'объектов {len(objects)}, файлов {len(files)}')

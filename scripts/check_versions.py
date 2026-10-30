@@ -121,7 +121,7 @@ if do_fetch and (added or changed):
         if os.path.exists(local):
             os.remove(local)
     print('3) догрузка изменений...')
-    out = run_export(['fetch', tsv, proj, '', include])
+    out = run_export(['fetch', root, tsv, proj, '', include])
     print(out.strip())
 else:
     print('(без --fetch догрузки нет)')
