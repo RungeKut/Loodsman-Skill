@@ -322,8 +322,9 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
 
   Set f = gFso.OpenTextFile(tsvDir & "\files.tsv", 1, False, False)
   f.SkipLine
-  Dim outList
+  Dim outList, doneStat
   Set outList = CreateObject("Scripting.Dictionary")
+  Set doneStat = CreateObject("Scripting.Dictionary")
 
   Do While Not f.AtEndOfStream
     line = f.ReadLine
@@ -342,6 +343,7 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
         End If
         If bSkip Then
           nSkipFilt = nSkipFilt + 1
+          doneStat.Add fName & "|" & docId, "filtered"
         Else
           ' owner object = parent of the document; docs of root -> project root
           ownerId = ""
@@ -379,23 +381,28 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
           End If
           If bHave Then
             nSkip = nSkip + 1
+            doneStat.Add fName & "|" & docId, "fetched"
           Else
             On Error Resume Next
             src = gSapi.RunMethod("GetFileById", Array(CLng(docId), fName, ""))
             If Err.Number <> 0 Then
               WScript.Echo "ERR GetFileById [" & docProd & "] " & fName & ": " & Err.Description
               nErr = nErr + 1
+              doneStat.Add fName & "|" & docId, "error"
               Err.Clear
             ElseIf src = "" Or Not gFso.FileExists(src) Then
               WScript.Echo "ERR no file: " & src
               nErr = nErr + 1
+              doneStat.Add fName & "|" & docId, "error"
             Else
               gFso.CopyFile src, dst, True
               If size = "" Or gFso.GetFile(dst).Size = CLng(size) Then
                 nDone = nDone + 1
+                doneStat.Add fName & "|" & docId, "fetched"
               Else
                 WScript.Echo "ERR size mismatch: " & fName
                 nErr = nErr + 1
+                doneStat.Add fName & "|" & docId, "error"
               End If
             End If
             On Error GoTo 0
@@ -406,14 +413,18 @@ Sub DoFetch(tsvDir, outDir, excl, incl)
   Loop
   f.Close
 
-  Dim fo, keys, k
+  ' status: fetched = file on disk, size matches; filtered = excluded by
+  ' extension filter; error = attempt failed (no body in PLM, see 30-03)
+  Dim fo, keys, k, st
   Set fo = gFso.CreateTextFile(tsvDir & "\files_done.tsv", True, False)
   fo.WriteLine "docId" & vbTab & "docType" & vbTab & "docProduct" & vbTab & _
     "docVer" & vbTab & "fileId" & vbTab & "fileName" & vbTab & "size" & vbTab & _
     "crc" & vbTab & "modified" & vbTab & "status"
   keys = outList.Keys
   For Each k In keys
-    fo.WriteLine outList(k) & vbTab & "fetched"
+    st = "error"
+    If doneStat.Exists(k) Then st = doneStat(k)
+    fo.WriteLine outList(k) & vbTab & st
   Next
   fo.Close
 
